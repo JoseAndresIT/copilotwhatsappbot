@@ -37,6 +37,12 @@ curl -X POST http://127.0.0.1:11434/api/generate \
   -d '{"model":"mistral","prompt":"Hola, ¿me escuchas?","stream":false}'
 ```
 
+## Estructura
+
+- `index.js`: punto de entrada mínimo (ideal para reducir conflictos de merge).
+- `src/bot.js`: lógica principal del bot (Ollama + WhatsApp).
+- `scripts/simulate-message.js`: simulación local sin WhatsApp real.
+
 ## Ejecutar bot de WhatsApp
 
 ```bash

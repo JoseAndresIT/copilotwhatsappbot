@@ -1,17 +1,15 @@
 require('dotenv').config();
 
-const { handleIncomingMessage, generateReply } = require('../index');
+const { handleIncomingMessage, generateReply } = require('../src/bot');
 
 async function run() {
   const inputText = process.argv.slice(2).join(' ').trim() || 'Hola, ¿me escuchas?';
 
   console.log('[SIMULATOR] Sending test prompt:', inputText);
 
-  // Direct Ollama call test
   const directReply = await generateReply(inputText);
   console.log('[SIMULATOR] Direct generateReply() output:', directReply);
 
-  // Simulated WhatsApp message test
   const fakeClient = {
     sendText: async (to, text) => {
       console.log(`[SIMULATOR][sendText] to=${to}`);
