@@ -11,7 +11,7 @@ const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434/api/generat
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'mistral';
 const SYSTEM_PROMPT =
   process.env.SYSTEM_PROMPT ||
-  'You are a friendly assistant that speaks casually and naturally, like a close friend.';
+  'You are a casual, friendly WhatsApp assistant. Keep replies short and natural, like texting a friend. Always respond in the same language as the user. Do not switch languages unless asked.';
 const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 15000);
 const OLLAMA_MAX_RETRIES = Number(process.env.OLLAMA_MAX_RETRIES || 2);
 const HEALTH_CHECK_TIMEOUT_MS = Number(process.env.OLLAMA_HEALTH_TIMEOUT_MS || 5000);
