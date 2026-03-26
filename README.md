@@ -14,7 +14,8 @@ Bot de WhatsApp en Node.js que envía mensajes entrantes a Ollama local y devuel
 ## Instalación
 
 ```bash
-npm install @open-wa/wa-automate axios dotenv
+npm install
+cp .env.example .env
 ```
 
 ## Variables de entorno (`.env`)
@@ -39,7 +40,7 @@ curl -X POST http://127.0.0.1:11434/api/generate \
 ## Ejecutar bot de WhatsApp
 
 ```bash
-node index.js
+npm start
 ```
 
 Al iniciar, escanea el QR y espera mensajes.
@@ -49,7 +50,7 @@ Al iniciar, escanea el QR y espera mensajes.
 Prueba directa de `generateReply()` y del flujo de `handleIncomingMessage` sin abrir WhatsApp:
 
 ```bash
-node scripts/simulate-message.js "Hola bot, ¿cómo estás?"
+npm run simulate -- "Hola bot, ¿cómo estás?"
 ```
 
 ## Logging incluido
