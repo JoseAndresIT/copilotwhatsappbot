@@ -74,7 +74,7 @@ function isRetryableError(error) {
   if (code === 'ECONNABORTED') return true; // axios timeout
   if (code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'ETIMEDOUT') return true;
 
-  return !status; // network failures usually have no HTTP status
+  return !status && !!code; // network failures usually have no HTTP status
 }
 
 async function checkOllamaHealth(force = false) {
@@ -88,7 +88,7 @@ async function checkOllamaHealth(force = false) {
     model: OLLAMA_MODEL,
     prompt: 'ping',
     stream: false,
-    options: { num_predict: 1 },
+    options: { num_predict: 0 },
   };
 
   try {
@@ -117,11 +117,16 @@ async function checkOllamaHealth(force = false) {
 }
 
 async function generateReply(userText) {
-  const prompt = buildPrompt(userText);
+  const prompt = buildPrompt(userText); // 👈 ESTO FALTABA
+
   const payload = {
     model: OLLAMA_MODEL,
     prompt,
     stream: false,
+    options: {
+      temperature: 0.7,
+      top_p: 0.9,
+    },
   };
 
   let lastError = null;
@@ -139,7 +144,10 @@ async function generateReply(userText) {
 
       console.log('[OLLAMA][RESPONSE] Status:', status);
       console.log('[OLLAMA][RESPONSE] Headers:', JSON.stringify(headers || {}));
-      console.log('[OLLAMA][RESPONSE] Body:', JSON.stringify(data || {}));
+      console.log(
+  '[OLLAMA][RESPONSE] Body:',
+  JSON.stringify(data || {}).slice(0, 500)
+);
       console.log('[OLLAMA][RESPONSE] Elapsed(ms):', elapsedMs);
 
       const reply = (data && typeof data.response === 'string' ? data.response : '').trim();
