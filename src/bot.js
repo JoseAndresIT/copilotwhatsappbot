@@ -12,7 +12,7 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3';
 const SYSTEM_PROMPT =
   process.env.SYSTEM_PROMPT ||
   'You are a friendly assistant that speaks casually and naturally, like a close friend.';
-const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 30000);
+const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 60000);
 const OLLAMA_MAX_RETRIES = Number(process.env.OLLAMA_MAX_RETRIES || 2);
 const HEALTH_CHECK_TIMEOUT_MS = Number(process.env.OLLAMA_HEALTH_TIMEOUT_MS || 5000);
 
