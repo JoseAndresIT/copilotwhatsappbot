@@ -191,7 +191,14 @@ return reply;
 
 async function handleIncomingMessage(client, message) {
   try {
-    if (!message || message.isGroupMsg || message.fromMe) return;
+    if (
+  !message ||
+  message.isGroupMsg ||
+  message.fromMe ||
+  (message.from && message.from.includes('@newsletter'))
+) {
+  return;
+}
 
     const incomingText = (message.body || '').trim();
     if (!incomingText) return;
