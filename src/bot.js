@@ -11,8 +11,8 @@ const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434/api/generat
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'mistral';
 const SYSTEM_PROMPT =
   process.env.SYSTEM_PROMPT ||
-  'You are a casual, friendly WhatsApp assistant. Keep replies short and natural, like texting a friend. Always respond in the same language as the user. Do not switch languages unless asked.';
-const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 15000);
+  'You are a friendly assistant that speaks casually and naturally, like a close friend.';
+const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 30000);
 const OLLAMA_MAX_RETRIES = Number(process.env.OLLAMA_MAX_RETRIES || 2);
 const HEALTH_CHECK_TIMEOUT_MS = Number(process.env.OLLAMA_HEALTH_TIMEOUT_MS || 5000);
 
@@ -28,7 +28,6 @@ const ollamaHttpClient = axios.create({
   },
   httpAgent: new http.Agent({
     keepAlive: true,
-    family: 4,
   }),
   httpsAgent: new https.Agent({
     keepAlive: true,
@@ -43,6 +42,16 @@ function logMissingEnvWarnings() {
       console.warn(`[CONFIG][WARN] ${key} is not set. Using default value.`);
     }
   });
+}
+
+function getOllamaBaseUrl() {
+  try {
+    const url = new URL(OLLAMA_URL);
+    return `${url.protocol}//${url.host}`;
+  } catch (error) {
+    console.warn('[CONFIG][WARN] Invalid OLLAMA_URL. Falling back to http://127.0.0.1:11434');
+    return 'http://127.0.0.1:11434';
+  }
 }
 
 function getChromeExecutablePath() {
@@ -71,10 +80,10 @@ function isRetryableError(error) {
 
   if (status && status >= 400 && status < 500) return false;
 
-  if (code === 'ECONNABORTED') return true; // axios timeout
+  if (code === 'ECONNABORTED') return true;
   if (code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'ETIMEDOUT') return true;
 
-  return !status && !!code; // network failures usually have no HTTP status
+  return !status;
 }
 
 async function checkOllamaHealth(force = false) {
@@ -84,21 +93,23 @@ async function checkOllamaHealth(force = false) {
     return lastHealthStatus;
   }
 
-  const healthPayload = {
-  model: OLLAMA_MODEL,
-  prompt: 'hi',
-  stream: false
-};
+  const healthUrl = `${getOllamaBaseUrl()}/api/tags`;
+  const startedAt = Date.now();
 
   try {
-    const startedAt = Date.now();
-    const response = await ollamaHttpClient.post(OLLAMA_URL, healthPayload, {
+    console.log('[OLLAMA][HEALTH][REQUEST] URL:', healthUrl);
+    const response = await ollamaHttpClient.get(healthUrl, {
       timeout: HEALTH_CHECK_TIMEOUT_MS,
+      headers: { Accept: 'application/json' },
     });
 
     const reachable = response && response.status >= 200 && response.status < 300;
+    const modelCount = response && response.data && Array.isArray(response.data.models)
+      ? response.data.models.length
+      : 0;
+
     console.log(
-      `[OLLAMA][HEALTH] reachable=${reachable} status=${response.status} elapsedMs=${Date.now() - startedAt}`
+      `[OLLAMA][HEALTH] reachable=${reachable} status=${response.status} models=${modelCount} elapsedMs=${Date.now() - startedAt}`
     );
 
     lastHealthCheckTs = now;
@@ -107,7 +118,7 @@ async function checkOllamaHealth(force = false) {
   } catch (error) {
     const code = error && error.code ? error.code : 'UNKNOWN';
     const status = error && error.response ? error.response.status : 'NO_STATUS';
-    console.warn(`[OLLAMA][HEALTH] reachable=false code=${code} status=${status}`);
+    console.warn(`[OLLAMA][HEALTH] reachable=false code=${code} status=${status} elapsedMs=${Date.now() - startedAt}`);
 
     lastHealthCheckTs = now;
     lastHealthStatus = false;
@@ -116,19 +127,12 @@ async function checkOllamaHealth(force = false) {
 }
 
 async function generateReply(userText) {
-  const prompt = buildPrompt(userText); // 👈 ESTO FALTABA
-
+  const prompt = buildPrompt(userText);
   const payload = {
     model: OLLAMA_MODEL,
     prompt,
     stream: false,
-    options: {
-      temperature: 0.7,
-      top_p: 0.9,
-    },
   };
-
-  let lastError = null;
 
   for (let attempt = 0; attempt <= OLLAMA_MAX_RETRIES; attempt += 1) {
     const startedAt = Date.now();
@@ -143,20 +147,13 @@ async function generateReply(userText) {
 
       console.log('[OLLAMA][RESPONSE] Status:', status);
       console.log('[OLLAMA][RESPONSE] Headers:', JSON.stringify(headers || {}));
-      console.log(
-  '[OLLAMA][RESPONSE] Body:',
-  JSON.stringify(data || {}).slice(0, 500)
-);
+      console.log('[OLLAMA][RESPONSE] Body:', JSON.stringify(data || {}));
       console.log('[OLLAMA][RESPONSE] Elapsed(ms):', elapsedMs);
 
       const reply = (data && typeof data.response === 'string' ? data.response : '').trim();
-
-if (!reply || reply.length < 2) {
-  console.warn('[OLLAMA][WARN] Empty or too short response');
-  return FALLBACK_REPLY;
-}
-
-return reply;
+      if (reply) return reply;
+      console.warn('[OLLAMA][RESPONSE] Empty model response, using fallback.');
+      return FALLBACK_REPLY;
     } catch (error) {
       const elapsedMs = Date.now() - startedAt;
       const code = error && error.code ? error.code : 'UNKNOWN';
@@ -169,11 +166,11 @@ return reply;
       console.error('[OLLAMA][ERROR] Message:', error && error.message ? error.message : error);
       console.error('[OLLAMA][ERROR] Response body:', JSON.stringify(responseData));
 
-      lastError = error;
-
       const shouldRetry = attempt < OLLAMA_MAX_RETRIES && isRetryableError(error);
-
-      if (!shouldRetry) break;
+      if (!shouldRetry) {
+        console.error('[OLLAMA][FINAL] Non-retryable or retries exhausted. Using fallback.');
+        return FALLBACK_REPLY;
+      }
 
       const backoffMs = 500 * 2 ** attempt;
       console.warn(`[OLLAMA][RETRY] Waiting ${backoffMs}ms before retry...`);
@@ -181,23 +178,12 @@ return reply;
     }
   }
 
-  if (lastError) {
-    console.error('[OLLAMA][FINAL] Returning fallback after retries exhausted.');
-  }
-
   return FALLBACK_REPLY;
 }
 
 async function handleIncomingMessage(client, message) {
   try {
-    if (
-  !message ||
-  message.isGroupMsg ||
-  message.fromMe ||
-  (message.from && message.from.includes('@newsletter'))
-) {
-  return;
-}
+    if (!message || message.isGroupMsg || message.fromMe) return;
 
     const incomingText = (message.body || '').trim();
     if (!incomingText) return;
@@ -206,9 +192,7 @@ async function handleIncomingMessage(client, message) {
 
     const isHealthy = await checkOllamaHealth();
     if (!isHealthy) {
-      console.warn('[FLOW] Ollama health check failed. Returning fallback response.');
-      await client.sendText(message.from, FALLBACK_REPLY);
-      return;
+      console.warn('[FLOW] Ollama health check failed; continuing with generateReply as best effort.');
     }
 
     const aiResponse = await generateReply(incomingText);
@@ -244,7 +228,7 @@ async function startBot() {
 
   const healthOk = await checkOllamaHealth(true);
   if (!healthOk) {
-    console.warn('[STARTUP] Ollama health check failed. Bot will continue and retry during message handling.');
+    console.warn('[STARTUP] Ollama health check failed. Bot will still try generate requests per message.');
   }
 
   console.log('✅ WhatsApp bot is online and listening for messages...');
@@ -252,8 +236,8 @@ async function startBot() {
   console.log(`🔗 Ollama endpoint: ${OLLAMA_URL}`);
   console.log(`⏱️ Ollama timeout(ms): ${OLLAMA_TIMEOUT_MS}`);
 
-  client.onMessage((message) => {
-    handleIncomingMessage(client, message).catch((error) => {
+  client.onMessage((msg) => {
+    handleIncomingMessage(client, msg).catch((error) => {
       console.error('[ERROR] Unhandled onMessage rejection:', error && error.message ? error.message : error);
     });
   });

@@ -25,7 +25,7 @@ OLLAMA_URL=http://127.0.0.1:11434/api/generate
 OLLAMA_MODEL=mistral
 SYSTEM_PROMPT=You are a friendly assistant that speaks casually and naturally, like a close friend.
 WA_SESSION_ID=ollama-whatsapp-bot
-OLLAMA_TIMEOUT_MS=15000
+OLLAMA_TIMEOUT_MS=30000
 OLLAMA_MAX_RETRIES=2
 OLLAMA_HEALTH_TIMEOUT_MS=5000
 # CHROME_PATH=/usr/bin/google-chrome
@@ -53,7 +53,7 @@ curl -X POST http://127.0.0.1:11434/api/generate \
 - **No** reintenta errores HTTP 4xx.
 - Si todo falla, responde fallback seguro:
   - `Lo siento, tuve un problema técnico 😅. Intentá de nuevo en un momento.`
-- `checkOllamaHealth()` valida conectividad de Ollama antes del procesamiento.
+- `checkOllamaHealth()` valida conectividad de Ollama con `GET /api/tags` antes del procesamiento (sin invocar inferencia).
 
 ## Ejecutar bot de WhatsApp
 
@@ -100,7 +100,7 @@ El bot imprime:
    - `ollama serve`
 2. Verifica endpoint manualmente con curl (arriba).
 3. Si hay timeouts:
-   - aumenta `OLLAMA_TIMEOUT_MS` (ej. 30000)
+   - aumenta `OLLAMA_TIMEOUT_MS` (ej. 45000)
    - confirma que el modelo esté descargado (`ollama pull mistral`)
 4. Si hay errores de conexión:
    - usa `127.0.0.1` en lugar de `localhost`
