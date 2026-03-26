@@ -85,11 +85,10 @@ async function checkOllamaHealth(force = false) {
   }
 
   const healthPayload = {
-    model: OLLAMA_MODEL,
-    prompt: 'ping',
-    stream: false,
-    options: { num_predict: 0 },
-  };
+  model: OLLAMA_MODEL,
+  prompt: 'hi',
+  stream: false
+};
 
   try {
     const startedAt = Date.now();
