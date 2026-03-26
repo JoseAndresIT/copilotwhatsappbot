@@ -9,7 +9,7 @@ Bot de WhatsApp en Node.js que envía mensajes entrantes a Ollama local y devuel
 - Linux/macOS/Windows
 - Google Chrome instalado (si no, define `CHROME_PATH`)
 - Ollama corriendo localmente (`ollama serve`)
-- Modelo descargado en Ollama (ejemplo: `ollama pull mistral`)
+- Modelo descargado en Ollama (ejemplo: `ollama pull llama3`)
 
 ## Instalación
 
@@ -22,7 +22,7 @@ cp .env.example .env
 
 ```env
 OLLAMA_URL=http://127.0.0.1:11434/api/generate
-OLLAMA_MODEL=mistral
+OLLAMA_MODEL=llama3
 SYSTEM_PROMPT=You are a friendly assistant that speaks casually and naturally, like a close friend.
 WA_SESSION_ID=ollama-whatsapp-bot
 OLLAMA_TIMEOUT_MS=30000
@@ -36,7 +36,7 @@ OLLAMA_HEALTH_TIMEOUT_MS=5000
 ```bash
 curl -X POST http://127.0.0.1:11434/api/generate \
   -H "Content-Type: application/json" \
-  -d '{"model":"mistral","prompt":"Hola, ¿me escuchas?","stream":false}'
+  -d '{"model":"llama3","prompt":"Hola, ¿me escuchas?","stream":false}'
 ```
 
 ## Estructura
@@ -54,6 +54,7 @@ curl -X POST http://127.0.0.1:11434/api/generate \
 - Si todo falla, responde fallback seguro:
   - `Lo siento, tuve un problema técnico 😅. Intentá de nuevo en un momento.`
 - `checkOllamaHealth()` valida conectividad de Ollama con `GET /api/tags` antes del procesamiento (sin invocar inferencia).
+- Si el health check falla, el bot **igual intenta generar respuesta** (evita falsos negativos).
 
 ## Ejecutar bot de WhatsApp
 
@@ -101,7 +102,7 @@ El bot imprime:
 2. Verifica endpoint manualmente con curl (arriba).
 3. Si hay timeouts:
    - aumenta `OLLAMA_TIMEOUT_MS` (ej. 45000)
-   - confirma que el modelo esté descargado (`ollama pull mistral`)
+   - confirma que el modelo esté descargado (`ollama pull llama3`)
 4. Si hay errores de conexión:
    - usa `127.0.0.1` en lugar de `localhost`
    - revisa firewall/proxy local

@@ -8,7 +8,7 @@ const axios = require('axios');
 const FALLBACK_REPLY =
   'Lo siento, tuve un problema técnico 😅. Intentá de nuevo en un momento.';
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434/api/generate';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'mistral';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3';
 const SYSTEM_PROMPT =
   process.env.SYSTEM_PROMPT ||
   'You are a friendly assistant that speaks casually and naturally, like a close friend.';
@@ -138,6 +138,7 @@ async function generateReply(userText) {
     const startedAt = Date.now();
     console.log(`[OLLAMA][REQUEST] Attempt ${attempt + 1}/${OLLAMA_MAX_RETRIES + 1}`);
     console.log('[OLLAMA][REQUEST] URL:', OLLAMA_URL);
+    console.log('[OLLAMA][REQUEST] Model:', OLLAMA_MODEL);
     console.log('[OLLAMA][REQUEST] Timeout(ms):', OLLAMA_TIMEOUT_MS);
     console.log('[OLLAMA][REQUEST] Payload:', JSON.stringify(payload));
 
@@ -192,9 +193,10 @@ async function handleIncomingMessage(client, message) {
 
     const isHealthy = await checkOllamaHealth();
     if (!isHealthy) {
-      console.warn('[FLOW] Ollama health check failed; continuing with generateReply as best effort.');
+      console.warn('[OLLAMA][HEALTH] Health check failed, attempting generation anyway...');
     }
 
+    // Always try generation even if health check is a false negative.
     const aiResponse = await generateReply(incomingText);
     await client.sendText(message.from, aiResponse || FALLBACK_REPLY);
 
