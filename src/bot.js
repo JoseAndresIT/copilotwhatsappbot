@@ -151,7 +151,13 @@ async function generateReply(userText) {
       console.log('[OLLAMA][RESPONSE] Elapsed(ms):', elapsedMs);
 
       const reply = (data && typeof data.response === 'string' ? data.response : '').trim();
-      return reply || FALLBACK_REPLY;
+
+if (!reply || reply.length < 2) {
+  console.warn('[OLLAMA][WARN] Empty or too short response');
+  return FALLBACK_REPLY;
+}
+
+return reply;
     } catch (error) {
       const elapsedMs = Date.now() - startedAt;
       const code = error && error.code ? error.code : 'UNKNOWN';
