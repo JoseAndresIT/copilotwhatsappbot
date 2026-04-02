@@ -5,8 +5,10 @@ const https = require('https');
 const wa = require('@open-wa/wa-automate');
 const axios = require('axios');
 
-const FALLBACK_REPLY =
-  'Mae luego te respondo 😅';
+const OLLAMA_FAILURE_REPLY = 'En este momento no puedo responder 😅 intentá más tarde';
+const SYSTEM_ERROR_REPLY = 'Ocurrió un error 😅 intentá luego';
+const INVALID_TEXT_REPLY = '¿Podés reescribir el mensaje de forma clara, por favor?';
+const INTRO_MESSAGE = 'Hola, soy el asistente de Jose 🤖✨';
 const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
 const OLLAMA_URL = process.env.OLLAMA_URL || `${OLLAMA_HOST}/api/generate`;
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'tinyllama';
@@ -20,10 +22,12 @@ const HEALTH_CHECK_TIMEOUT_MS = Number(process.env.OLLAMA_HEALTH_TIMEOUT_MS || 5
 let lastHealthCheckTs = 0;
 let lastHealthStatus = null;
 
+const introducedUsers = new Set();
+
 const QUICK_REPLIES = {
-  hola: 'Mae todo bien 😄',
-  'todo bien?': 'Todo chill mae 😎',
-  gracias: 'De una mae 🤝',
+  hola: 'Hola, todo bien ✨',
+  'todo bien?': 'Todo bien, gracias por preguntar ✨',
+  gracias: 'Con gusto 🤝',
 };
 
 const ollamaHttpClient = axios.create({
@@ -33,12 +37,8 @@ const ollamaHttpClient = axios.create({
     Accept: 'application/json',
     'Content-Type': 'application/json',
   },
-  httpAgent: new http.Agent({
-    keepAlive: true,
-  }),
-  httpsAgent: new https.Agent({
-    keepAlive: true,
-  }),
+  httpAgent: new http.Agent({ keepAlive: true }),
+  httpsAgent: new https.Agent({ keepAlive: true }),
 });
 
 function logMissingEnvWarnings() {
@@ -64,29 +64,19 @@ function getOllamaBaseUrl() {
 function getChromeExecutablePath() {
   if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
 
-  const platform = process.platform;
-
-  if (platform === 'linux') return '/usr/bin/google-chrome';
-  if (platform === 'darwin') return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-  if (platform === 'win32') return 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+  if (process.platform === 'linux') return '/usr/bin/google-chrome';
+  if (process.platform === 'darwin') return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+  if (process.platform === 'win32') return 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 
   return undefined;
 }
 
 function buildPrompt(userText) {
-  return `${SYSTEM_PROMPT}\n\nUser: ${userText}\nAssistant:`;
+  return `${SYSTEM_PROMPT}\n\nUsuario: ${userText}\nAsistente:`;
 }
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isComplexMessage(text) {
-  const normalized = String(text || '').toLowerCase();
-  if (normalized.length > 280) return true;
-
-  const complexHints = ['analiza', 'análisis', 'explica en detalle', 'razona', 'comparativa', 'ensayo'];
-  return complexHints.some((hint) => normalized.includes(hint));
 }
 
 function isRetryableError(error) {
@@ -95,10 +85,42 @@ function isRetryableError(error) {
 
   if (status && status >= 400 && status < 500) return false;
 
-  if (code === 'ECONNABORTED') return true;
-  if (code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'ETIMEDOUT') return true;
+  return code === 'ECONNABORTED' || code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'ETIMEDOUT' || !status;
+}
 
-  return !status;
+function isOllamaError(error) {
+  if (!error) return false;
+  const status = error.response && error.response.status ? error.response.status : null;
+  return Boolean(error.isAxiosError || error.code || status);
+}
+
+function sanitizeReply(text) {
+  const oneLine = String(text || '')
+    .replace(/\r?\n+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return oneLine.slice(0, 140);
+}
+
+function isAllowedLatinText(text) {
+  if (!text) return false;
+  const latinRegex = /^[\p{Script=Latin}\p{Mark}\d\s.,;:!?¡¿'"()\-_/@#%&+*=<>\[\]{}]+$/u;
+  return latinRegex.test(text);
+}
+
+function shouldIgnoreMessage(message) {
+  if (!message || message.isGroupMsg || message.fromMe) return true;
+
+  const from = String(message.from || '').toLowerCase();
+  if (from.includes('@newsletter')) return true;
+
+  if (message.isMedia || message.isMMS || (message.type && message.type !== 'chat')) return true;
+
+  const body = String(message.body || '').trim();
+  if (!body || body.length > 200) return true;
+
+  return false;
 }
 
 async function checkOllamaHealth(force = false) {
@@ -119,13 +141,7 @@ async function checkOllamaHealth(force = false) {
     });
 
     const reachable = response && response.status >= 200 && response.status < 300;
-    const modelCount = response && response.data && Array.isArray(response.data.models)
-      ? response.data.models.length
-      : 0;
-
-    console.log(
-      `[OLLAMA][HEALTH] reachable=${reachable} status=${response.status} models=${modelCount} elapsedMs=${Date.now() - startedAt}`
-    );
+    console.log(`[OLLAMA][HEALTH] reachable=${reachable} status=${response.status} elapsedMs=${Date.now() - startedAt}`);
 
     lastHealthCheckTs = now;
     lastHealthStatus = reachable;
@@ -144,18 +160,17 @@ async function checkOllamaHealth(force = false) {
 async function generateReply(userText) {
   const normalized = String(userText || '').toLowerCase().trim();
   if (QUICK_REPLIES[normalized]) {
-    return QUICK_REPLIES[normalized].slice(0, 140);
+    return sanitizeReply(QUICK_REPLIES[normalized]);
   }
 
-  const prompt = buildPrompt(userText);
   const payload = {
     model: OLLAMA_MODEL,
-    prompt,
+    prompt: buildPrompt(userText),
     stream: false,
     options: {
       num_predict: 25,
       temperature: 0.7,
-      stop: ["\n"],
+      stop: ['\n'],
     },
   };
 
@@ -164,51 +179,30 @@ async function generateReply(userText) {
     console.log(`[OLLAMA][REQUEST] Attempt ${attempt + 1}/${OLLAMA_MAX_RETRIES + 1}`);
     console.log('[OLLAMA][REQUEST] URL:', OLLAMA_URL);
     console.log('[OLLAMA][REQUEST] Model:', OLLAMA_MODEL);
-    console.log('[OLLAMA][REQUEST] Timeout(ms):', OLLAMA_TIMEOUT_MS);
-    console.log('[OLLAMA][REQUEST] Payload:', JSON.stringify(payload));
 
     try {
-      const { data, status, headers } = await ollamaHttpClient.post(OLLAMA_URL, payload);
+      const { data, status } = await ollamaHttpClient.post(OLLAMA_URL, payload);
       const elapsedMs = Date.now() - startedAt;
-
       console.log('[OLLAMA][RESPONSE] Status:', status);
-      console.log('[OLLAMA][RESPONSE] Headers:', JSON.stringify(headers || {}));
-      console.log('[OLLAMA][RESPONSE] Body:', JSON.stringify(data || {}));
       console.log('[OLLAMA][RESPONSE] Elapsed(ms):', elapsedMs);
 
-      const reply = (data && typeof data.response === 'string' ? data.response : '').trim();
-      const singleLineReply = reply.split(/\r?\n/)[0].replace(/\s+/g, ' ').trim();
-      const tokenCount = Number(data && data.eval_count ? data.eval_count : 0);
-      const promptTokenCount = Number(data && data.prompt_eval_count ? data.prompt_eval_count : 0);
-      const totalDurationNs = Number(data && data.total_duration ? data.total_duration : 0);
-
-      console.log('[OLLAMA][METRICS] total_duration_ns:', totalDurationNs);
-      console.log('[OLLAMA][METRICS] prompt_tokens:', promptTokenCount);
-      console.log('[OLLAMA][METRICS] output_tokens:', tokenCount);
+      const singleLineReply = sanitizeReply(data && typeof data.response === 'string' ? data.response : '');
+      console.log('[OLLAMA][METRICS] output_tokens:', Number(data && data.eval_count ? data.eval_count : 0));
       console.log('[OLLAMA][METRICS] text:', singleLineReply);
 
-      if (singleLineReply) {
-        const safeReply = singleLineReply || FALLBACK_REPLY;
-        return safeReply.slice(0, 140);
-      }
-      console.warn('[OLLAMA][RESPONSE] Empty model response, using fallback.');
-      return FALLBACK_REPLY.slice(0, 140);
+      if (singleLineReply) return singleLineReply;
+      throw new Error('EMPTY_OLLAMA_RESPONSE');
     } catch (error) {
       const elapsedMs = Date.now() - startedAt;
       const code = error && error.code ? error.code : 'UNKNOWN';
       const status = error && error.response ? error.response.status : 'NO_STATUS';
-      const responseData = error && error.response ? error.response.data : null;
-
       console.error('[OLLAMA][ERROR] Code:', code);
       console.error('[OLLAMA][ERROR] Status:', status);
       console.error('[OLLAMA][ERROR] Elapsed(ms):', elapsedMs);
-      console.error('[OLLAMA][ERROR] Message:', error && error.message ? error.message : error);
-      console.error('[OLLAMA][ERROR] Response body:', JSON.stringify(responseData));
 
       const shouldRetry = attempt < OLLAMA_MAX_RETRIES && isRetryableError(error);
       if (!shouldRetry) {
-        console.error('[OLLAMA][FINAL] Non-retryable or retries exhausted. Using fallback.');
-        return FALLBACK_REPLY.slice(0, 140);
+        throw error;
       }
 
       const backoffMs = 500 * 2 ** attempt;
@@ -217,22 +211,28 @@ async function generateReply(userText) {
     }
   }
 
-  return FALLBACK_REPLY.slice(0, 140);
+  throw new Error('OLLAMA_UNAVAILABLE');
 }
 
 async function handleIncomingMessage(client, message) {
+  if (!client || shouldIgnoreMessage(message)) return;
+
+  const from = String(message.from || '').trim();
+  const incomingText = String(message.body || '').trim();
+
+  if (!from || !incomingText) return;
+
   try {
-    if (!message || message.isGroupMsg || message.fromMe) return;
+    console.log(`[INCOMING] ${from}: ${incomingText}`);
 
-    const incomingText = (message.body || '').trim();
-    if (!incomingText) return;
-
-    console.log(`[INCOMING] ${message.from}: ${incomingText}`);
-
-    if (isComplexMessage(incomingText)) {
-      console.warn('[FLOW] Complex message detected, skipping AI to keep low-latency mode.');
-      await client.sendText(message.from, FALLBACK_REPLY);
+    if (!isAllowedLatinText(incomingText)) {
+      await client.sendText(from, INVALID_TEXT_REPLY);
       return;
+    }
+
+    if (!introducedUsers.has(from)) {
+      introducedUsers.add(from);
+      await client.sendText(from, INTRO_MESSAGE);
     }
 
     const isHealthy = await checkOllamaHealth();
@@ -240,24 +240,17 @@ async function handleIncomingMessage(client, message) {
       console.warn('[OLLAMA][HEALTH] Health check failed, attempting generation anyway...');
     }
 
-    // Always try generation even if health check is a false negative.
     const aiResponse = await generateReply(incomingText);
-    await client.sendText(message.from, aiResponse || FALLBACK_REPLY);
-
-    console.log(`[REPLIED] ${message.from}: ${aiResponse}`);
+    await client.sendText(from, sanitizeReply(aiResponse || OLLAMA_FAILURE_REPLY));
   } catch (error) {
     console.error('[ERROR] Failed to process message:', error && error.message ? error.message : error);
-
-    if (message && message.from) {
-      await client.sendText(message.from, FALLBACK_REPLY).catch(() => {});
-    }
+    const safeReply = isOllamaError(error) ? OLLAMA_FAILURE_REPLY : SYSTEM_ERROR_REPLY;
+    await client.sendText(from, safeReply).catch(() => {});
   }
 }
 
 async function startBot() {
   logMissingEnvWarnings();
-
-  const executablePath = getChromeExecutablePath();
 
   const client = await wa.create({
     sessionId: process.env.WA_SESSION_ID || 'ollama-whatsapp-bot',
@@ -266,7 +259,7 @@ async function startBot() {
     authTimeout: 0,
     headless: true,
     useChrome: true,
-    executablePath,
+    executablePath: getChromeExecutablePath(),
     killProcessOnBrowserClose: true,
     disableSpins: true,
     logConsole: false,
@@ -293,11 +286,15 @@ async function startBot() {
 }
 
 module.exports = {
-  FALLBACK_REPLY,
+  INTRO_MESSAGE,
+  INVALID_TEXT_REPLY,
+  OLLAMA_FAILURE_REPLY,
+  SYSTEM_ERROR_REPLY,
   buildPrompt,
   checkOllamaHealth,
   generateReply,
   getChromeExecutablePath,
   handleIncomingMessage,
+  isAllowedLatinText,
   startBot,
 };
