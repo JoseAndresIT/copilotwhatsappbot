@@ -24,7 +24,7 @@ cp .env.example .env
 OLLAMA_HOST=http://127.0.0.1:11434
 OLLAMA_URL=http://127.0.0.1:11434/api/generate
 OLLAMA_MODEL=tinyllama
-SYSTEM_PROMPT=Respondé en 1 línea, voseo tico, corto y natural. Sin explicaciones.
+SYSTEM_PROMPT=Respondé en español, 1 línea, voseo tico, corto y natural. Sin inglés. Sin explicaciones.
 WA_SESSION_ID=ollama-whatsapp-bot
 OLLAMA_TIMEOUT_MS=15000
 OLLAMA_MAX_RETRIES=1
@@ -138,7 +138,7 @@ Request optimizado que usa el bot:
 ```json
 {
   "model": "tinyllama",
-  "prompt": "Respondé en 1 línea, voseo tico, corto y natural. Sin explicaciones.",
+  "prompt": "Respondé en español, 1 línea, voseo tico, corto y natural. Sin inglés. Sin explicaciones.",
   "stream": false,
   "options": {
     "num_predict": 25,
@@ -152,3 +152,10 @@ Request optimizado que usa el bot:
 ### Modo GOD TIER (opcional ya aplicado)
 
 - Si el mensaje parece complejo (muy largo o con señales de análisis), el bot evita IA y responde fallback inmediato para mantener latencia baja.
+
+
+## Optimización de latencia extra
+
+- Respuestas instantáneas para: `hola`, `todo bien?`, `gracias` (sin llamar a IA).
+- Warmup al iniciar: `generateReply("hola")` para reducir cold start.
+- Límite duro de salida: 140 caracteres.
