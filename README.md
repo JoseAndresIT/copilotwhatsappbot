@@ -9,7 +9,7 @@ Bot de WhatsApp en Node.js que envía mensajes entrantes a Ollama local y devuel
 - Linux/macOS/Windows
 - Google Chrome instalado (si no, define `CHROME_PATH`)
 - Ollama corriendo localmente (`ollama serve`)
-- Modelo descargado en Ollama (ejemplo: `ollama pull llama3`)
+- Modelo descargado en Ollama (ejemplo: `ollama pull tinyllama`)
 
 ## Instalación
 
@@ -21,13 +21,15 @@ cp .env.example .env
 ## Variables de entorno (`.env`)
 
 ```env
+OLLAMA_HOST=http://127.0.0.1:11434
 OLLAMA_URL=http://127.0.0.1:11434/api/generate
-OLLAMA_MODEL=llama3
-SYSTEM_PROMPT=You are a friendly assistant that speaks casually and naturally, like a close friend.
+OLLAMA_MODEL=tinyllama
+SYSTEM_PROMPT=Respondé en 1 línea, voseo tico, corto y natural. Sin explicaciones.
 WA_SESSION_ID=ollama-whatsapp-bot
-OLLAMA_TIMEOUT_MS=30000
-OLLAMA_MAX_RETRIES=2
+OLLAMA_TIMEOUT_MS=15000
+OLLAMA_MAX_RETRIES=1
 OLLAMA_HEALTH_TIMEOUT_MS=5000
+OLLAMA_NUM_PARALLEL=1
 # CHROME_PATH=/usr/bin/google-chrome
 ```
 
@@ -36,7 +38,7 @@ OLLAMA_HEALTH_TIMEOUT_MS=5000
 ```bash
 curl -X POST http://127.0.0.1:11434/api/generate \
   -H "Content-Type: application/json" \
-  -d '{"model":"llama3","prompt":"Hola, ¿me escuchas?","stream":false}'
+  -d '{"model":"tinyllama","prompt":"Hola, ¿me escuchas?","stream":false}'
 ```
 
 ## Estructura
@@ -51,8 +53,8 @@ curl -X POST http://127.0.0.1:11434/api/generate \
 - Reintenta sólo en timeout/errores de red (`ECONNABORTED`, `ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`).
 - Usa backoff exponencial: **500ms → 1000ms**.
 - **No** reintenta errores HTTP 4xx.
-- Si todo falla, responde fallback seguro:
-  - `Lo siento, tuve un problema técnico 😅. Intentá de nuevo en un momento.`
+- Si Ollama falla o supera timeout, responde fallback inmediato:
+  - `Mae luego te respondo 😅`
 - `checkOllamaHealth()` valida conectividad de Ollama con `GET /api/tags` antes del procesamiento (sin invocar inferencia).
 - Si el health check falla, el bot **igual intenta generar respuesta** (evita falsos negativos).
 
@@ -102,9 +104,51 @@ El bot imprime:
 2. Verifica endpoint manualmente con curl (arriba).
 3. Si hay timeouts:
    - aumenta `OLLAMA_TIMEOUT_MS` (ej. 45000)
-   - confirma que el modelo esté descargado (`ollama pull llama3`)
+   - confirma que el modelo esté descargado (`ollama pull tinyllama`)
 4. Si hay errores de conexión:
    - usa `127.0.0.1` en lugar de `localhost`
    - revisa firewall/proxy local
 5. Si el bot responde fallback frecuente:
    - revisa logs `[OLLAMA][HEALTH]`, `[OLLAMA][RETRY]` y `[OLLAMA][ERROR]`.
+
+
+
+
+## Modo ligero para hardware limitado (CPU + ~12GB RAM)
+
+- Modelo primario: `tinyllama`
+- Alternativa: `phi3:mini`
+- No usar modelos mayores a 4B en este entorno.
+- No cambiar modelo automáticamente desde el bot.
+- Priorizar velocidad sobre precisión (chat corto tipo WhatsApp).
+
+Comandos sugeridos:
+
+```bash
+ollama rm mistral
+ollama rm llama3
+ollama pull tinyllama
+ollama serve
+```
+
+> Nota: usa `ollama rm` (no `remove`).
+
+Request optimizado que usa el bot:
+
+```json
+{
+  "model": "tinyllama",
+  "prompt": "Respondé en 1 línea, voseo tico, corto y natural. Sin explicaciones.",
+  "stream": false,
+  "options": {
+    "num_predict": 25,
+    "temperature": 0.7,
+    "stop": ["\n"]
+  }
+}
+```
+
+
+### Modo GOD TIER (opcional ya aplicado)
+
+- Si el mensaje parece complejo (muy largo o con señales de análisis), el bot evita IA y responde fallback inmediato para mantener latencia baja.

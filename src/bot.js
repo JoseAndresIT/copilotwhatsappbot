@@ -6,14 +6,15 @@ const wa = require('@open-wa/wa-automate');
 const axios = require('axios');
 
 const FALLBACK_REPLY =
-  'Lo siento, tuve un problema técnico 😅. Intentá de nuevo en un momento.';
-const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434/api/generate';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3';
+  'Mae luego te respondo 😅';
+const OLLAMA_HOST = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+const OLLAMA_URL = process.env.OLLAMA_URL || `${OLLAMA_HOST}/api/generate`;
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'tinyllama';
 const SYSTEM_PROMPT =
   process.env.SYSTEM_PROMPT ||
-  'You are a friendly assistant that speaks casually and naturally, like a close friend.';
-const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 60000);
-const OLLAMA_MAX_RETRIES = Number(process.env.OLLAMA_MAX_RETRIES || 2);
+  'Respondé en 1 línea, voseo tico, corto y natural. Sin explicaciones.';
+const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 15000);
+const OLLAMA_MAX_RETRIES = Number(process.env.OLLAMA_MAX_RETRIES || 1);
 const HEALTH_CHECK_TIMEOUT_MS = Number(process.env.OLLAMA_HEALTH_TIMEOUT_MS || 5000);
 
 let lastHealthCheckTs = 0;
@@ -35,7 +36,7 @@ const ollamaHttpClient = axios.create({
 });
 
 function logMissingEnvWarnings() {
-  const optionalWithDefaults = ['OLLAMA_URL', 'OLLAMA_MODEL', 'SYSTEM_PROMPT', 'OLLAMA_TIMEOUT_MS'];
+  const optionalWithDefaults = ['OLLAMA_HOST', 'OLLAMA_URL', 'OLLAMA_MODEL', 'SYSTEM_PROMPT', 'OLLAMA_TIMEOUT_MS'];
 
   optionalWithDefaults.forEach((key) => {
     if (!process.env[key]) {
@@ -72,6 +73,14 @@ function buildPrompt(userText) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isComplexMessage(text) {
+  const normalized = String(text || '').toLowerCase();
+  if (normalized.length > 280) return true;
+
+  const complexHints = ['analiza', 'análisis', 'explica en detalle', 'razona', 'comparativa', 'ensayo'];
+  return complexHints.some((hint) => normalized.includes(hint));
 }
 
 function isRetryableError(error) {
@@ -132,6 +141,11 @@ async function generateReply(userText) {
     model: OLLAMA_MODEL,
     prompt,
     stream: false,
+    options: {
+      num_predict: 25,
+      temperature: 0.7,
+      stop: ["\n"],
+    },
   };
 
   for (let attempt = 0; attempt <= OLLAMA_MAX_RETRIES; attempt += 1) {
@@ -152,7 +166,17 @@ async function generateReply(userText) {
       console.log('[OLLAMA][RESPONSE] Elapsed(ms):', elapsedMs);
 
       const reply = (data && typeof data.response === 'string' ? data.response : '').trim();
-      if (reply) return reply;
+      const singleLineReply = reply.split(/\r?\n/)[0].replace(/\s+/g, ' ').trim();
+      const tokenCount = Number(data && data.eval_count ? data.eval_count : 0);
+      const promptTokenCount = Number(data && data.prompt_eval_count ? data.prompt_eval_count : 0);
+      const totalDurationNs = Number(data && data.total_duration ? data.total_duration : 0);
+
+      console.log('[OLLAMA][METRICS] total_duration_ns:', totalDurationNs);
+      console.log('[OLLAMA][METRICS] prompt_tokens:', promptTokenCount);
+      console.log('[OLLAMA][METRICS] output_tokens:', tokenCount);
+      console.log('[OLLAMA][METRICS] text:', singleLineReply);
+
+      if (singleLineReply) return singleLineReply;
       console.warn('[OLLAMA][RESPONSE] Empty model response, using fallback.');
       return FALLBACK_REPLY;
     } catch (error) {
@@ -190,6 +214,12 @@ async function handleIncomingMessage(client, message) {
     if (!incomingText) return;
 
     console.log(`[INCOMING] ${message.from}: ${incomingText}`);
+
+    if (isComplexMessage(incomingText)) {
+      console.warn('[FLOW] Complex message detected, skipping AI to keep low-latency mode.');
+      await client.sendText(message.from, FALLBACK_REPLY);
+      return;
+    }
 
     const isHealthy = await checkOllamaHealth();
     if (!isHealthy) {
@@ -235,6 +265,7 @@ async function startBot() {
 
   console.log('✅ WhatsApp bot is online and listening for messages...');
   console.log(`🤖 Ollama model: ${OLLAMA_MODEL}`);
+  console.log(`🔗 Ollama host: ${OLLAMA_HOST}`);
   console.log(`🔗 Ollama endpoint: ${OLLAMA_URL}`);
   console.log(`⏱️ Ollama timeout(ms): ${OLLAMA_TIMEOUT_MS}`);
 

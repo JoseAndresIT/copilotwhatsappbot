@@ -4,12 +4,24 @@ const { handleIncomingMessage, generateReply } = require('../src/bot');
 
 function getMessagesFromCli() {
   const rawArgs = process.argv.slice(2);
-  if (!rawArgs.length) return ['Hola, ¿me escuchas?'];
+  if (!rawArgs.length) {
+    return ['hola', 'todo bien?', 'gracias', '¿podés ayudarme con esto?', 'explicame un análisis comparativo largo'];
+  }
 
   return rawArgs
     .flatMap((arg) => arg.split('||'))
     .map((msg) => msg.trim())
     .filter(Boolean);
+}
+
+function validateOutput(text, elapsedMs) {
+  const oneLine = !String(text || '').includes('\n');
+  const shortEnough = String(text || '').length <= 140;
+  const fastEnough = elapsedMs < 5000;
+
+  console.log('[SIMULATOR][VALIDATION] one_line=', oneLine);
+  console.log('[SIMULATOR][VALIDATION] short_text=', shortEnough);
+  console.log('[SIMULATOR][VALIDATION] under_5s=', fastEnough);
 }
 
 function warnMissingEnv() {
@@ -50,6 +62,7 @@ async function runSingleMessage(inputText, idx, total) {
 
   const elapsedMs = Date.now() - startedAt;
   console.log(`[SIMULATOR] Execution time: ${elapsedMs} ms`);
+  validateOutput(directReply, elapsedMs);
 }
 
 async function run() {
