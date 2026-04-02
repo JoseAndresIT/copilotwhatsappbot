@@ -1,0 +1,25 @@
+{
+  "name": "copilotwhatsappbot",
+  "version": "1.0.0",
+  "description": "WhatsApp chatbot using @open-wa/wa-automate with local Ollama LLM",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "simulate": "node scripts/simulate-message.js",
+    "check": "node --check index.js && node --check scripts/simulate-message.js"
+  },
+  "keywords": [
+    "whatsapp",
+    "open-wa",
+    "ollama",
+    "nodejs",
+    "chatbot"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@open-wa/wa-automate": "^4.76.0",
+    "axios": "^1.8.4",
+    "dotenv": "^17.2.3"
+  }
+}
