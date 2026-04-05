@@ -136,6 +136,16 @@ function normalizeWhitespace(text) {
   return String(text || '').replace(/\s+/g, ' ').trim();
 }
 
+function normalizeForRule(text) {
+  return normalizeWhitespace(text)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/[^\p{Letter}\p{Number}\s]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function getLatinRatio(text) {
   const chars = [...String(text || '')].filter((ch) => !/\s/.test(ch));
   if (!chars.length) return 1;
@@ -177,6 +187,36 @@ function isOutputValid(text, maxTokens) {
 function getQuickReply(text) {
   const key = normalizeWhitespace(text).toLowerCase();
   return QUICK_REPLIES[key] || '';
+}
+
+function matchesRuleIntent(input, candidates) {
+  return candidates.some((candidate) => (
+    input === candidate
+    || input.startsWith(`${candidate} `)
+    || input.includes(` ${candidate} `)
+    || input.includes(candidate)
+  ));
+}
+
+function ruleEngine(text) {
+  const normalized = normalizeForRule(text);
+  if (!normalized) return null;
+
+  const greetings = ['hola', 'buenas', 'buenos dias', 'buenas tardes', 'buenas noches'];
+  const thanks = ['gracias', 'muchas gracias', 'te lo agradezco'];
+  const farewell = ['chao', 'adios', 'bye', 'nos vemos'];
+  const simpleQuestions = ['como estas', 'todo bien', 'que tal'];
+  const commerce = ['precio', 'costo'];
+  const support = ['ayuda', 'soporte'];
+
+  if (matchesRuleIntent(normalized, greetings)) return sanitizeOutput('Hola mae 😄', OUTPUT_CHAR_LIMIT);
+  if (matchesRuleIntent(normalized, thanks)) return sanitizeOutput('¡Con gusto! 🤝', OUTPUT_CHAR_LIMIT);
+  if (matchesRuleIntent(normalized, farewell)) return sanitizeOutput('¡Nos vemos! 👋', OUTPUT_CHAR_LIMIT);
+  if (matchesRuleIntent(normalized, simpleQuestions)) return sanitizeOutput('Todo bien por acá 😄 ¿y vos?', OUTPUT_CHAR_LIMIT);
+  if (matchesRuleIntent(normalized, commerce)) return sanitizeOutput('Te ayudo con precios y costos, decime qué producto ocupás 👌', OUTPUT_CHAR_LIMIT);
+  if (matchesRuleIntent(normalized, support)) return sanitizeOutput('Claro, te ayudo con soporte. Contame qué te está fallando 🙌', OUTPUT_CHAR_LIMIT);
+
+  return null;
 }
 
 function isCloudConfigured() {
@@ -578,6 +618,13 @@ async function routeHybrid(input, userId) {
   const text = normalizeWhitespace(input);
   if (!text) return '';
   const context = getUserContext(userId);
+
+  const ruleReply = ruleEngine(text);
+  if (ruleReply) {
+    setCachedResponse(text, ruleReply, context);
+    logStructured({ source: 'rule_engine', latency: Date.now() - startedAt, fallback: false, error: null });
+    return ruleReply;
+  }
 
   const cached = getCachedResponse(text, context);
   if (cached) {
