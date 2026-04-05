@@ -17,8 +17,8 @@ const CONFIG = {
   },
   local: {
     url: process.env.OLLAMA_URL || 'http://127.0.0.1:11434/api/generate',
-    model: process.env.OLLAMA_MODEL || 'gemma:2b',
-    maxTokens: Number(process.env.LOCAL_MAX_TOKENS || 64),
+    model: process.env.OLLAMA_MODEL || 'tinyllama',
+    maxTokens: Number(process.env.LOCAL_MAX_TOKENS || 40),
     temperature: Number(process.env.LOCAL_TEMPERATURE || 0.3),
     timeout: Number(process.env.LOCAL_TIMEOUT_MS || process.env.TIMEOUT_MS || 12000),
     retries: Number(process.env.LOCAL_RETRIES || 1),
@@ -64,6 +64,7 @@ const CONFIG = {
 
 const SAFETY_FALLBACK_MESSAGE = 'Lo siento, tuve un problema procesando tu mensaje. ¿Podés intentar de nuevo?';
 const MESSAGE_LIMIT = 200;
+const OUTPUT_CHAR_LIMIT = 120;
 const QUICK_REPLIES = {
   hola: 'Hola, ¡todo bien por acá! ✨',
   buenas: '¡Hola! ¿Cómo te ayudo? ✨',
@@ -76,6 +77,7 @@ const QUICK_REPLIES = {
 
 const userMemory = new Map();
 const responseCache = new Map();
+let cacheWriteCount = 0;
 const healthCache = {
   local: { ok: null, updatedAt: 0 },
   cloud: { ok: null, updatedAt: 0 },
@@ -188,12 +190,22 @@ function isFallbackAllowed(reason) {
   return CONFIG.fallback.onError;
 }
 
-function cacheKeyForMessage(text) {
-  return normalizeWhitespace(text).toLowerCase();
+function hashText(value) {
+  let hash = 5381;
+  const input = String(value || '');
+  for (let i = 0; i < input.length; i += 1) {
+    hash = ((hash << 5) + hash) + input.charCodeAt(i);
+    hash |= 0;
+  }
+  return String(hash >>> 0);
 }
 
-function getCachedResponse(text) {
-  const key = cacheKeyForMessage(text);
+function cacheKeyForMessage(text, context = '') {
+  return `${normalizeWhitespace(text).toLowerCase()}|${hashText(context)}`;
+}
+
+function getCachedResponse(text, context = '') {
+  const key = cacheKeyForMessage(text, context);
   const hit = responseCache.get(key);
   if (!hit) return '';
   if (hit.expiresAt < Date.now()) {
@@ -203,12 +215,28 @@ function getCachedResponse(text) {
   return hit.value;
 }
 
-function setCachedResponse(text, value) {
-  const cleaned = sanitizeOutput(value, 240);
+function setCachedResponse(text, value, context = '') {
+  const cleaned = sanitizeOutput(value, OUTPUT_CHAR_LIMIT);
   if (!cleaned) return;
-  responseCache.set(cacheKeyForMessage(text), {
+  cacheWriteCount += 1;
+  if (cacheWriteCount % 50 === 0 && responseCache.size > 1000) {
+    const now = Date.now();
+    for (const [key, item] of responseCache.entries()) {
+      if (!item || item.expiresAt < now) responseCache.delete(key);
+    }
+  }
+  responseCache.set(cacheKeyForMessage(text, context), {
     value: cleaned,
     expiresAt: Date.now() + CONFIG.system.cacheTtlMs,
+  });
+}
+
+function setFallbackCache(text, value, context = '') {
+  const cleaned = sanitizeOutput(value, OUTPUT_CHAR_LIMIT);
+  if (!cleaned) return;
+  responseCache.set(cacheKeyForMessage(text, context), {
+    value: cleaned,
+    expiresAt: Date.now() + 8000,
   });
 }
 
@@ -299,8 +327,11 @@ function latencySnapshot() {
 function classifyIntent(text) {
   const normalized = normalizeWhitespace(text).toLowerCase();
   const complexHints = ['analiza', 'compará', 'explicá', 'resume', 'detalle', 'paso a paso', 'código'];
-  if (normalized.length > CONFIG.system.simpleThreshold) return 'complex';
-  if (complexHints.some((hint) => normalized.includes(hint))) return 'complex';
+  const lengthScore = Math.min(normalized.length / Math.max(CONFIG.system.simpleThreshold, 1), 2);
+  const punctuationScore = ((normalized.match(/[?¿!]/g) || []).length / 4);
+  const keywordScore = complexHints.reduce((acc, hint) => (normalized.includes(hint) ? acc + 0.8 : acc), 0);
+  const complexityScore = lengthScore + punctuationScore + keywordScore;
+  if (complexityScore >= 1.7) return 'complex';
   return 'simple';
 }
 
@@ -534,7 +565,10 @@ async function runParallelRace(text, context, deadlineMs) {
 
   const second = await (first.source === 'local' ? cloudTask : localTask);
   raceController.abort();
-  if (second.value) return second;
+  if (second.value) {
+    setCachedResponse(text, second.value, context);
+    return second;
+  }
   return { source: 'none', value: '' };
 }
 
@@ -543,8 +577,9 @@ async function routeHybrid(input, userId) {
   const deadlineMs = Date.now() + CONFIG.system.globalTimeoutMs;
   const text = normalizeWhitespace(input);
   if (!text) return '';
+  const context = getUserContext(userId);
 
-  const cached = getCachedResponse(text);
+  const cached = getCachedResponse(text, context);
   if (cached) {
     logStructured({ source: 'cache', latency: Date.now() - startedAt, fallback: false, error: null, cache: 'hit' });
     return cached;
@@ -553,7 +588,7 @@ async function routeHybrid(input, userId) {
 
   const quick = getQuickReply(text);
   if (quick) {
-    setCachedResponse(text, quick);
+    setCachedResponse(text, quick, context);
     return quick;
   }
 
@@ -562,11 +597,18 @@ async function routeHybrid(input, userId) {
   }
 
   const intent = classifyIntent(text);
-  const context = getUserContext(userId);
   const [localHealthy, cloudHealthy] = await Promise.all([checkLocalHealth(), checkCloudHealth()]);
   const { ranking, scores } = rankModels(intent, localHealthy, cloudHealthy);
+  const localScore = scores.find((x) => x.source === 'local');
+  const cloudScore = scores.find((x) => x.source === 'cloud');
+  const scoreGap = localScore && cloudScore ? Math.abs(localScore.score - cloudScore.score) : Infinity;
 
-  if (CONFIG.features.parallelMode && localHealthy && cloudHealthy && ranking.length > 1) {
+  if (Date.now() > deadlineMs) {
+    setFallbackCache(text, SAFETY_FALLBACK_MESSAGE, context);
+    return SAFETY_FALLBACK_MESSAGE;
+  }
+
+  if (CONFIG.features.parallelMode && localHealthy && cloudHealthy && ranking.length > 1 && scoreGap < 0.15) {
     const raceResult = await runParallelRace(text, context, deadlineMs);
     logStructured({
       source: 'router',
@@ -581,7 +623,7 @@ async function routeHybrid(input, userId) {
     });
 
     if (raceResult.value) {
-      setCachedResponse(text, raceResult.value);
+      setCachedResponse(text, raceResult.value, context);
       return raceResult.value;
     }
   }
@@ -590,6 +632,7 @@ async function routeHybrid(input, userId) {
   for (let i = 0; i < ranking.length; i += 1) {
     if (Date.now() > deadlineMs) {
       logStructured({ source: 'router', latency: Date.now() - startedAt, fallback: true, error: 'global_timeout', globalTimeoutTriggered: true });
+      setFallbackCache(text, SAFETY_FALLBACK_MESSAGE, context);
       return SAFETY_FALLBACK_MESSAGE;
     }
 
@@ -600,7 +643,7 @@ async function routeHybrid(input, userId) {
       : await askCloud(text, context, { deadlineMs });
 
     if (output) {
-      setCachedResponse(text, output);
+      setCachedResponse(text, output, context);
       logStructured({
         source: 'router',
         latency: Date.now() - startedAt,
@@ -628,6 +671,7 @@ async function routeHybrid(input, userId) {
     latencyHistory: latencySnapshot(),
   });
 
+  setFallbackCache(text, SAFETY_FALLBACK_MESSAGE, context);
   return SAFETY_FALLBACK_MESSAGE;
 }
 
@@ -647,7 +691,7 @@ async function handleIncomingMessage(client, message) {
   if (body.length > MESSAGE_LIMIT) return;
 
   const reply = await routeHybrid(body, from);
-  const safeReply = sanitizeOutput(reply || SAFETY_FALLBACK_MESSAGE, 240);
+  const safeReply = sanitizeOutput(reply || SAFETY_FALLBACK_MESSAGE, OUTPUT_CHAR_LIMIT);
 
   await client.sendText(from, safeReply).catch(() => {});
 
@@ -657,7 +701,7 @@ async function handleIncomingMessage(client, message) {
 
 async function warmupLocalModel() {
   if (!CONFIG.features.warmup) return;
-  await askLocal('hola', '').catch(() => {});
+  await askLocal('hola', 'warmup', { deadlineMs: Date.now() + 30000 }).catch(() => {});
 }
 
 async function startBot() {
@@ -675,7 +719,7 @@ async function startBot() {
   });
 
   await Promise.all([checkLocalHealth(true), checkCloudHealth(true)]).catch(() => {});
-  await warmupLocalModel();
+  warmupLocalModel().catch(() => {});
 
   console.log('✅ WhatsApp bot is online with hybrid AI routing.');
 
